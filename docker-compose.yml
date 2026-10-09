@@ -1,0 +1,23 @@
+services:
+  mongo:
+    image: mongo:8.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+
+  api:
+    build:
+      context: .
+      dockerfile: src/GtMotive.Estimate.Microservice.Host/Dockerfile
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - MongoDb__ConnectionString=mongodb://mongo:27017
+      - MongoDb__MongoDbDatabaseName=renting
+    ports:
+      - "8080:8080"
+    depends_on:
+      - mongo
+
+volumes:
+  mongo-data:
