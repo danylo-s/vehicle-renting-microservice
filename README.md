@@ -1,3 +1,7 @@
+# Vehicle renting microservice
+
+> Built on the GtMotive hexagonal template. The template was upgraded from **.NET 9 (STS, end of support 2026-11-10)** to **.NET 10 (LTS)** before adding any feature.
+
 # Sample Implementation of Hexagonal Architecture in a Microservice
 ## Index
 ### [Introduction](#introduction)

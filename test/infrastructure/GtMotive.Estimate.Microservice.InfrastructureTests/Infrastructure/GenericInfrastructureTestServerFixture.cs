@@ -3,6 +3,7 @@ using System.IO;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 
 [assembly: CLSCompliant(false)]
 
@@ -10,16 +11,21 @@ namespace GtMotive.Estimate.Microservice.InfrastructureTests.Infrastructure
 {
     internal sealed class GenericInfrastructureTestServerFixture : IDisposable
     {
+        private readonly IHost _host;
+
         public GenericInfrastructureTestServerFixture()
         {
-            var hostBuilder = new WebHostBuilder()
+            _host = new HostBuilder()
                 .UseContentRoot(Directory.GetCurrentDirectory())
                 .UseEnvironment("IntegrationTest")
                 .UseDefaultServiceProvider(options => { options.ValidateScopes = true; })
                 .ConfigureAppConfiguration((context, builder) => { builder.AddEnvironmentVariables(); })
-                .UseStartup<Startup>();
+                .ConfigureWebHost(web => web
+                    .UseTestServer()
+                    .UseStartup<Startup>())
+                .Start();
 
-            Server = new TestServer(hostBuilder);
+            Server = _host.GetTestServer();
         }
 
         public TestServer Server { get; }
@@ -27,7 +33,7 @@ namespace GtMotive.Estimate.Microservice.InfrastructureTests.Infrastructure
         /// <inheritdoc />
         public void Dispose()
         {
-            Server?.Dispose();
+            _host.Dispose();
         }
     }
 }
