@@ -3,43 +3,50 @@ using System.Diagnostics;
 using System.Threading.Tasks;
 using GtMotive.Estimate.Microservice.Api;
 using GtMotive.Estimate.Microservice.Infrastructure;
+using GtMotive.Estimate.Microservice.Infrastructure.MongoDb.Settings;
 using MediatR;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Testcontainers.MongoDb;
 using Xunit;
 
 [assembly: CLSCompliant(false)]
 
 namespace GtMotive.Estimate.Microservice.FunctionalTests.Infrastructure
 {
-    internal sealed class CompositionRootTestFixture : IDisposable, IAsyncLifetime
+    public sealed class CompositionRootTestFixture : IDisposable, IAsyncLifetime
     {
-        private readonly ServiceProvider _serviceProvider;
+        private readonly MongoDbContainer _mongoDbContainer = new MongoDbBuilder("mongo:8.0").Build();
+        private ServiceProvider _serviceProvider;
 
         public CompositionRootTestFixture()
         {
-            var configuration = new ConfigurationBuilder()
+            Configuration = new ConfigurationBuilder()
                 .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
                 .AddEnvironmentVariables()
                 .Build();
-
-            var services = new ServiceCollection();
-            Configuration = configuration;
-            ConfigureServices(services);
-            services.AddSingleton<IConfiguration>(configuration);
-            _serviceProvider = services.BuildServiceProvider();
         }
 
         public IConfiguration Configuration { get; }
 
         public async Task InitializeAsync()
         {
-            await Task.CompletedTask;
+            await _mongoDbContainer.StartAsync();
+
+            var services = new ServiceCollection();
+            ConfigureServices(services);
+            services.Configure<MongoDbSettings>(options =>
+            {
+                options.ConnectionString = _mongoDbContainer.GetConnectionString();
+                options.MongoDbDatabaseName = "renting-functional-tests";
+            });
+            services.AddSingleton(Configuration);
+            _serviceProvider = services.BuildServiceProvider();
         }
 
         public async Task DisposeAsync()
         {
-            await Task.CompletedTask;
+            await _mongoDbContainer.DisposeAsync();
         }
 
         public async Task UsingHandlerForRequest<TRequest>(Func<IRequestHandler<TRequest, Unit>, Task> handlerAction)
@@ -86,7 +93,7 @@ namespace GtMotive.Estimate.Microservice.FunctionalTests.Infrastructure
 
         public void Dispose()
         {
-            _serviceProvider.Dispose();
+            _serviceProvider?.Dispose();
         }
 
         private static void ConfigureServices(IServiceCollection services)

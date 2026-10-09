@@ -102,6 +102,7 @@
         <PackageReference Update="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.12" />
         <PackageReference Update="Respawn" Version="6.2.1" />
         <PackageReference Update="Moq" Version="4.20.72" />
+        <PackageReference Update="Testcontainers.MongoDb" Version="4.16.0" />
 
         <!-- DbUp -->
         <PackageReference Update="dbup-sqlserver" Version="4.5.0" />
