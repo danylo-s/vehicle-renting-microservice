@@ -1,9 +1,13 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using GtMotive.Estimate.Microservice.Api.UseCases;
 using GtMotive.Estimate.Microservice.Api.UseCases.Vehicles;
+using GtMotive.Estimate.Microservice.Domain;
+using GtMotive.Estimate.Microservice.Domain.Interfaces;
 using GtMotive.Estimate.Microservice.Domain.Vehicles;
 using GtMotive.Estimate.Microservice.FunctionalTests.Infrastructure;
 using MediatR;
@@ -35,6 +39,80 @@ namespace GtMotive.Estimate.Microservice.FunctionalTests.Specs
             secondRent.Should().BeOfType<OkObjectResult>()
                 .Which.Value.Should().BeOfType<VehicleResponse>()
                 .Which.RentedBy.Should().Be(CustomerId);
+        }
+
+        [Fact]
+        public async Task SameVehicleRentedConcurrentlyForDifferentCustomersOnlyOneSucceeds()
+        {
+            var vehicleId = await CreateVehicle("3333CCC");
+
+            var failures = await Task.WhenAll(
+                Enumerable.Range(0, 10).Select(_ => TryRent(vehicleId, NewCustomerId())));
+
+            failures.Count(f => f is null).Should().Be(1);
+            failures.Where(f => f is not null).Should()
+                .OnlyContain(f => f is VehicleNotAvailableException || f is VehicleConcurrencyException);
+        }
+
+        [Fact]
+        public async Task SameCustomerRentingDifferentVehiclesConcurrentlyOnlyOneSucceeds()
+        {
+            var customerId = NewCustomerId();
+            var vehicleIds = new List<Guid>();
+            for (var i = 0; i < 5; i++)
+            {
+                vehicleIds.Add(await CreateVehicle($"4444DD{i}"));
+            }
+
+            var failures = await Task.WhenAll(vehicleIds.Select(id => TryRent(id, customerId)));
+
+            failures.Count(f => f is null).Should().Be(1);
+            failures.Where(f => f is not null).Should().AllBeOfType<CustomerAlreadyHasRentalException>();
+        }
+
+        [Fact]
+        public async Task StaleReturnCannotEraseANewerRental()
+        {
+            var vehicleId = await CreateVehicle("5555EEE");
+            await Rent(vehicleId, NewCustomerId());
+
+            await Fixture.UsingRepository<IVehicleRepository>(async staleRepository =>
+            {
+                // A slow request loads the rented vehicle...
+                var staleVehicle = await staleRepository.GetByIdAsync(vehicleId);
+
+                // ...meanwhile the vehicle is returned and rented to someone else.
+                await Return(vehicleId);
+                await Rent(vehicleId, NewCustomerId());
+
+                staleVehicle.Return();
+                var saveStaleReturn = () => staleRepository.UpdateAsync(staleVehicle);
+                await saveStaleReturn.Should().ThrowAsync<VehicleConcurrencyException>();
+            });
+
+            await Fixture.UsingRepository<IVehicleRepository>(async repository =>
+            {
+                var vehicle = await repository.GetByIdAsync(vehicleId);
+                vehicle.IsRented.Should().BeTrue();
+            });
+        }
+
+        private static string NewCustomerId()
+        {
+            return Guid.NewGuid().ToString("N");
+        }
+
+        private async Task<DomainException> TryRent(Guid vehicleId, string customerId)
+        {
+            try
+            {
+                await Rent(vehicleId, customerId);
+                return null;
+            }
+            catch (DomainException ex)
+            {
+                return ex;
+            }
         }
 
         private async Task<Guid> CreateVehicle(string licensePlate)

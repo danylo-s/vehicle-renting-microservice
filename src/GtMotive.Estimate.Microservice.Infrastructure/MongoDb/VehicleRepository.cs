@@ -15,6 +15,9 @@ namespace GtMotive.Estimate.Microservice.Infrastructure.MongoDb
 
         private readonly IMongoCollection<VehicleDocument> _collection;
 
+        // Optimistic concurrency: version of each vehicle as it was loaded in this scope (one per request).
+        private readonly Dictionary<Guid, long> _loadedVersions = [];
+
         public VehicleRepository(MongoService mongoService)
         {
             ArgumentNullException.ThrowIfNull(mongoService);
@@ -26,19 +29,20 @@ namespace GtMotive.Estimate.Microservice.Infrastructure.MongoDb
         {
             ArgumentNullException.ThrowIfNull(vehicle);
 
-            await _collection.InsertOneAsync(ToDocument(vehicle));
+            await _collection.InsertOneAsync(ToDocument(vehicle, version: 0));
+            _loadedVersions[vehicle.Id] = 0;
         }
 
         public async Task<Vehicle> GetByIdAsync(Guid id)
         {
             var document = await _collection.Find(d => d.Id == id).FirstOrDefaultAsync();
-            return document is null ? null : ToDomain(document);
+            return document is null ? null : Track(document);
         }
 
         public async Task<IReadOnlyCollection<Vehicle>> ListNotRentedAsync()
         {
             var documents = await _collection.Find(d => d.CurrentRental == null).ToListAsync();
-            return documents.ConvertAll(ToDomain);
+            return documents.ConvertAll(Track);
         }
 
         public async Task<bool> HasActiveRentalAsync(CustomerId customerId)
@@ -52,16 +56,19 @@ namespace GtMotive.Estimate.Microservice.Infrastructure.MongoDb
         {
             ArgumentNullException.ThrowIfNull(vehicle);
 
-            // Conditional update: a rental only starts if the stored vehicle is still not rented,
-            // so two customers renting the same vehicle concurrently cannot both succeed.
-            var filter = vehicle.IsRented
-                ? Builders<VehicleDocument>.Filter.Where(d => d.Id == vehicle.Id && d.CurrentRental == null)
-                : Builders<VehicleDocument>.Filter.Where(d => d.Id == vehicle.Id);
+            if (!_loadedVersions.TryGetValue(vehicle.Id, out var loadedVersion))
+            {
+                throw new InvalidOperationException($"The vehicle {vehicle.Id} must be loaded through this repository before it is updated.");
+            }
 
+            // Saved only if nobody changed the vehicle since it was loaded: two employees renting
+            // or returning the same vehicle at the same time cannot overwrite each other.
             ReplaceOneResult result;
             try
             {
-                result = await _collection.ReplaceOneAsync(filter, ToDocument(vehicle));
+                result = await _collection.ReplaceOneAsync(
+                    d => d.Id == vehicle.Id && d.Version == loadedVersion,
+                    ToDocument(vehicle, loadedVersion + 1));
             }
             catch (MongoWriteException ex) when (ex.WriteError.Category == ServerErrorCategory.DuplicateKey)
             {
@@ -70,8 +77,10 @@ namespace GtMotive.Estimate.Microservice.Infrastructure.MongoDb
 
             if (result.MatchedCount == 0)
             {
-                throw new VehicleNotAvailableException($"The vehicle {vehicle.Id} is already rented.");
+                throw new VehicleConcurrencyException($"The vehicle {vehicle.Id} was modified by another request. Reload it and try again.");
             }
+
+            _loadedVersions[vehicle.Id] = loadedVersion + 1;
         }
 
         internal static void CreateIndexes(IMongoDatabase database)
@@ -90,11 +99,12 @@ namespace GtMotive.Estimate.Microservice.Infrastructure.MongoDb
                 .Indexes.CreateOne(new CreateIndexModel<VehicleDocument>(keys, options));
         }
 
-        private static VehicleDocument ToDocument(Vehicle vehicle)
+        private static VehicleDocument ToDocument(Vehicle vehicle, long version)
         {
             return new VehicleDocument
             {
                 Id = vehicle.Id,
+                Version = version,
                 LicensePlate = vehicle.LicensePlate,
                 Brand = vehicle.Brand,
                 Model = vehicle.Model,
@@ -124,10 +134,19 @@ namespace GtMotive.Estimate.Microservice.Infrastructure.MongoDb
                 rental);
         }
 
+        private Vehicle Track(VehicleDocument document)
+        {
+            _loadedVersions[document.Id] = document.Version;
+            return ToDomain(document);
+        }
+
         private sealed class VehicleDocument
         {
             [BsonId]
             public Guid Id { get; set; }
+
+            [BsonElement("version")]
+            public long Version { get; set; }
 
             [BsonElement("licensePlate")]
             public string LicensePlate { get; set; }

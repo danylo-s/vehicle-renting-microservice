@@ -71,7 +71,13 @@ Business-rule violations are `DomainException`s. The template's `BusinessExcepti
   - `IUnitOfWork`, `IBus`/`IBusFactory` and `IAuthorizationService` are not used. They would need a replica set, a message broker or an identity server, and no requirement calls for them.
 - **No Unit of Work or Mongo transactions.** Multi-document transactions need a replica set, and every operation changes a single document. The repository saves directly.
 - **One active rental per customer** is checked by the use case, which gives a clean error message. MongoDB also enforces it under concurrent requests, with a unique partial index on `currentRental.customerId` (`$type: "string"`). A duplicate-key error is translated into the same domain exception.
-- **The same vehicle rented concurrently by two customers:** renting is a conditional update (`_id` matches AND `currentRental` is null), so only one request succeeds. The other gets a 400. Returns are last-write-wins, which is harmless.
+- **Several employees working on the same vehicle at once:** this uses optimistic concurrency.
+  - Each vehicle document has a `version`.
+  - The repository (one instance per request) remembers the version it loaded, and saves only if the stored version still matches. The save also increments the version.
+  - The losing request gets a 400 ("modified by another request, reload and try again").
+  - This covers two customers renting the same vehicle at once, and a slow, stale return that would otherwise erase a newer rental.
+  - The version stays in the persistence document. The domain model doesn't change.
+- Functional tests cover both races (same vehicle, and same customer renting different vehicles) and the stale return.
 - MongoDB settings use the template's `MongoDb` section (`ConnectionString`, `MongoDbDatabaseName`). Indexes are created once, when `MongoService` is first resolved.
 
 ---

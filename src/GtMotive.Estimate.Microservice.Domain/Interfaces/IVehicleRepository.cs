@@ -43,7 +43,7 @@ namespace GtMotive.Estimate.Microservice.Domain.Interfaces
         /// <param name="vehicle">Vehicle.</param>
         /// <returns>A task.</returns>
         /// <exception cref="CustomerAlreadyHasRentalException">The customer already has another rental.</exception>
-        /// <exception cref="VehicleNotAvailableException">The vehicle was rented concurrently.</exception>
+        /// <exception cref="VehicleConcurrencyException">The vehicle was modified by another request since it was loaded.</exception>
         Task UpdateAsync(Vehicle vehicle);
     }
 }
