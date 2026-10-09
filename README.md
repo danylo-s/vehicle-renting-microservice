@@ -64,6 +64,11 @@ Business-rule violations are `DomainException`s. The template's `BusinessExcepti
 ## Design notes and known limitations
 
 - Flow: Controller → MediatR request → handler builds the use case input → use case → output port → presenter → `IActionResult`. Each presenter is a scoped instance shared by the handler and the use case.
+- Template ports in use:
+  - `IAppLogger<T>`: the create, rent and return use cases log each successful operation.
+  - `ITelemetry`: the same use cases track `VehicleCreated`, `VehicleRented` and `VehicleReturned`. It is Application Insights in production and a no-op in Development.
+  - Logs and events carry only the vehicle id, because the customer id is personal data.
+  - `IUnitOfWork`, `IBus`/`IBusFactory` and `IAuthorizationService` are not used. They would need a replica set, a message broker or an identity server, and no requirement calls for them.
 - **No Unit of Work or Mongo transactions.** Multi-document transactions need a replica set, and every operation changes a single document. The repository saves directly.
 - **One active rental per customer** is checked by the use case, which gives a clean error message. MongoDB also enforces it under concurrent requests, with a unique partial index on `currentRental.customerId` (`$type: "string"`). A duplicate-key error is translated into the same domain exception.
 - **The same vehicle rented concurrently by two customers:** renting is a conditional update (`_id` matches AND `currentRental` is null), so only one request succeeds. The other gets a 400. Returns are last-write-wins, which is harmless.

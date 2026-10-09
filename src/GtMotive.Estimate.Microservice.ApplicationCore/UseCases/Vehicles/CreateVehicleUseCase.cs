@@ -11,14 +11,20 @@ namespace GtMotive.Estimate.Microservice.ApplicationCore.UseCases.Vehicles
     /// <param name="repository">Vehicle repository.</param>
     /// <param name="outputPort">Output port.</param>
     /// <param name="timeProvider">Time provider.</param>
+    /// <param name="logger">Logger.</param>
+    /// <param name="telemetry">Telemetry.</param>
     public sealed class CreateVehicleUseCase(
         IVehicleRepository repository,
         IOutputPortStandard<CreateVehicleOutput> outputPort,
-        TimeProvider timeProvider) : IUseCase<CreateVehicleInput>
+        TimeProvider timeProvider,
+        IAppLogger<CreateVehicleUseCase> logger,
+        ITelemetry telemetry) : IUseCase<CreateVehicleInput>
     {
         private readonly IVehicleRepository _repository = repository;
         private readonly IOutputPortStandard<CreateVehicleOutput> _outputPort = outputPort;
         private readonly TimeProvider _timeProvider = timeProvider;
+        private readonly IAppLogger<CreateVehicleUseCase> _logger = logger;
+        private readonly ITelemetry _telemetry = telemetry;
 
         /// <inheritdoc />
         public async Task Execute(CreateVehicleInput input)
@@ -29,6 +35,9 @@ namespace GtMotive.Estimate.Microservice.ApplicationCore.UseCases.Vehicles
             var vehicle = Vehicle.Create(input.LicensePlate, input.Brand, input.Model, input.ManufactureDate, today);
 
             await _repository.AddAsync(vehicle);
+
+            _logger.LogInformation("Vehicle {VehicleId} added to the fleet.", vehicle.Id);
+            _telemetry.TrackVehicleEvent("VehicleCreated", vehicle);
 
             _outputPort.StandardHandle(new CreateVehicleOutput(vehicle));
         }

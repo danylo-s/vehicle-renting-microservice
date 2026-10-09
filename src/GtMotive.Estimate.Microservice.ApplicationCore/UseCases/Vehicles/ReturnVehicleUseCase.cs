@@ -9,12 +9,18 @@ namespace GtMotive.Estimate.Microservice.ApplicationCore.UseCases.Vehicles
     /// </summary>
     /// <param name="repository">Vehicle repository.</param>
     /// <param name="outputPort">Output port.</param>
+    /// <param name="logger">Logger.</param>
+    /// <param name="telemetry">Telemetry.</param>
     public sealed class ReturnVehicleUseCase(
         IVehicleRepository repository,
-        IReturnVehicleOutputPort outputPort) : IUseCase<ReturnVehicleInput>
+        IReturnVehicleOutputPort outputPort,
+        IAppLogger<ReturnVehicleUseCase> logger,
+        ITelemetry telemetry) : IUseCase<ReturnVehicleInput>
     {
         private readonly IVehicleRepository _repository = repository;
         private readonly IReturnVehicleOutputPort _outputPort = outputPort;
+        private readonly IAppLogger<ReturnVehicleUseCase> _logger = logger;
+        private readonly ITelemetry _telemetry = telemetry;
 
         /// <inheritdoc />
         public async Task Execute(ReturnVehicleInput input)
@@ -31,6 +37,9 @@ namespace GtMotive.Estimate.Microservice.ApplicationCore.UseCases.Vehicles
             vehicle.Return();
 
             await _repository.UpdateAsync(vehicle);
+
+            _logger.LogInformation("Vehicle {VehicleId} returned.", vehicle.Id);
+            _telemetry.TrackVehicleEvent("VehicleReturned", vehicle);
 
             _outputPort.StandardHandle(new ReturnVehicleOutput(vehicle));
         }

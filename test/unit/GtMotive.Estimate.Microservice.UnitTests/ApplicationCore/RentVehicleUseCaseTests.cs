@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using FluentAssertions;
 using GtMotive.Estimate.Microservice.ApplicationCore.UseCases.Vehicles;
@@ -17,6 +18,7 @@ namespace GtMotive.Estimate.Microservice.UnitTests.ApplicationCore
 
         private readonly Mock<IVehicleRepository> _repository = new();
         private readonly Mock<IRentVehicleOutputPort> _outputPort = new();
+        private readonly Mock<ITelemetry> _telemetry = new();
         private readonly RentVehicleUseCase _useCase;
 
         public RentVehicleUseCaseTests()
@@ -24,7 +26,12 @@ namespace GtMotive.Estimate.Microservice.UnitTests.ApplicationCore
             var timeProvider = new Mock<TimeProvider>();
             timeProvider.Setup(t => t.GetUtcNow()).Returns(Now);
 
-            _useCase = new RentVehicleUseCase(_repository.Object, _outputPort.Object, timeProvider.Object);
+            _useCase = new RentVehicleUseCase(
+                _repository.Object,
+                _outputPort.Object,
+                timeProvider.Object,
+                Mock.Of<IAppLogger<RentVehicleUseCase>>(),
+                _telemetry.Object);
         }
 
         [Fact]
@@ -41,6 +48,7 @@ namespace GtMotive.Estimate.Microservice.UnitTests.ApplicationCore
             vehicle.IsRented.Should().BeFalse();
             _repository.Verify(r => r.UpdateAsync(It.IsAny<Vehicle>()), Times.Never);
             _outputPort.Verify(p => p.StandardHandle(It.IsAny<RentVehicleOutput>()), Times.Never);
+            _telemetry.Verify(t => t.TrackEvent(It.IsAny<string>(), It.IsAny<IDictionary<string, string>>(), It.IsAny<IDictionary<string, double>>()), Times.Never);
         }
 
         [Fact]
@@ -56,6 +64,7 @@ namespace GtMotive.Estimate.Microservice.UnitTests.ApplicationCore
             vehicle.CurrentRental.Should().Be(new Rental(customerId, Now));
             _repository.Verify(r => r.UpdateAsync(vehicle), Times.Once);
             _outputPort.Verify(p => p.StandardHandle(It.Is<RentVehicleOutput>(o => o.Vehicle == vehicle)), Times.Once);
+            _telemetry.Verify(t => t.TrackEvent("VehicleRented", It.IsAny<IDictionary<string, string>>(), It.IsAny<IDictionary<string, double>>()), Times.Once);
         }
 
         [Fact]
