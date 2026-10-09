@@ -1,6 +1,75 @@
 # Vehicle renting microservice
 
-> Built on the GtMotive hexagonal template. The template was upgraded from **.NET 9 (STS, end of support 2026-11-10)** to **.NET 10 (LTS)** before adding any feature.
+A renting company microservice built on the GtMotive hexagonal template below. It creates fleet vehicles, lists the available ones, and rents and returns them.
+
+## Run it
+
+Requirements: Docker with docker compose.
+
+```bash
+docker compose up --build
+```
+
+- Swagger UI: http://localhost:8080/swagger
+- MongoDB is exposed on `localhost:27017` and its data lives in the `mongo-data` volume.
+
+To run the API from the IDE / `dotnet run`, start only the database (`docker compose up mongo`). `appsettings.Development.json` already points to `mongodb://localhost:27017`.
+
+## Run the tests
+
+Requirements: .NET 10 SDK. The functional tests also need Docker running, because they start a MongoDB container with Testcontainers.
+
+```bash
+dotnet test src/microservice.sln
+```
+
+| Project | What it covers |
+|---|---|
+| `UnitTests` | `RentVehicleUseCase` in isolation (Moq repository and output port, fixed `TimeProvider`). |
+| `InfrastructureTests` | `POST /api/vehicles` through the TestServer with an invalid body. Checks only request reception and model validation (400), no database. |
+| `FunctionalTests` | MediatR handlers + use cases + real MongoDB (Testcontainers), no HTTP host. A customer cannot rent a second vehicle until the first is returned. |
+
+## Why .NET 10
+
+The template targeted .NET 9, which is an STS release that reaches end of support on 2026-11-10. Before adding any feature, it was upgraded to **.NET 10 (LTS)**:
+- `net10.0`
+- SDK 10.0.100 with `latestFeature` roll-forward. The original `global.json` pinned 9.0.200 with roll-forward disabled, while the Dockerfile used SDK 9.0.100, so the image could not build.
+- Microsoft packages updated to 10.0.x.
+- The .NET 10 obsoletions (`KnownIPNetworks`, `WebHostBuilder` in the test fixture) are fixed in code.
+- Packages that NuGet audit flags as vulnerable are updated (MongoDB.Driver, ApplicationInsights.Kubernetes, a pinned Newtonsoft.Json). An unused AutoMapper reference is removed.
+
+The Dockerfile no longer uses the private Azure Artifacts feed, because every package is on nuget.org.
+
+## Endpoints
+
+| Method | Route | Body | Success | Errors |
+|---|---|---|---|---|
+| POST | `/api/vehicles` | `{ "licensePlate", "brand", "model", "manufactureDate": "yyyy-MM-dd" }` | 201 + vehicle | 400 validation / older than 5 years / future date |
+| GET | `/api/vehicles/available` | – | 200 + list | – |
+| POST | `/api/vehicles/{id}/rent` | `{ "customerId" }` | 200 + vehicle | 400 validation / already rented / customer already has a rental / vehicle too old; 404 unknown id |
+| POST | `/api/vehicles/{id}/return` | – | 200 + vehicle | 400 not rented; 404 unknown id |
+
+Business-rule violations are `DomainException`s. The template's `BusinessExceptionFilter` turns them into 400 ProblemDetails. An unknown vehicle id goes through the template's `IOutputPortNotFound` and returns 404.
+
+## Interpretation decisions
+
+- A person is identified by a `customerId` string (for example a national ID) sent in the rent request. There is no customer entity or endpoint. The id is trimmed and upper-cased, so `a-111` and `A-111` are the same person.
+- **Available** means not currently rented AND manufactured within the last 5 years, as of today.
+- **5-year rule:** creating a vehicle fails if `manufactureDate < today - 5 years` or if the date is in the future. Vehicles that age out later are left out of the available list and cannot be rented. There is no background cleanup job.
+- A vehicle is returned by its id only. Returning a vehicle that is not rented is a business error.
+- There is no rental history. A vehicle holds only its current rental (`customerId`, `rentedAt`), or none.
+- "Now" comes from an injected `System.TimeProvider`, so the rules are testable.
+- There is no authentication. The configured JWT authority is an external company server that cannot be reached locally.
+
+## Design notes and known limitations
+
+- Flow: Controller → MediatR request → handler builds the use case input → use case → output port → presenter → `IActionResult`. Each presenter is a scoped instance shared by the handler and the use case.
+- **No Unit of Work or Mongo transactions.** Multi-document transactions need a replica set, and every operation changes a single document. The repository saves directly.
+- **One active rental per customer** is checked by the use case, which gives a clean error message. MongoDB also enforces it under concurrent requests, with a unique partial index on `currentRental.customerId` (`$type: "string"`). A duplicate-key error is translated into the same domain exception.
+- **The same vehicle rented concurrently by two customers:** renting is a conditional update (`_id` matches AND `currentRental` is null), so only one request succeeds. The other gets a 400. Returns are last-write-wins, which is harmless.
+- MongoDB settings use the template's `MongoDb` section (`ConnectionString`, `MongoDbDatabaseName`). Indexes are created once, when `MongoService` is first resolved.
+
+---
 
 # Sample Implementation of Hexagonal Architecture in a Microservice
 ## Index
