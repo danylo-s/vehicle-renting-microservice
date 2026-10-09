@@ -79,6 +79,22 @@ namespace GtMotive.Estimate.Microservice.UnitTests.ApplicationCore
             _repository.Verify(r => r.UpdateAsync(It.IsAny<Vehicle>()), Times.Never);
         }
 
+        [Fact]
+        public async Task ExecuteWhenVehicleIsAlreadyRentedBySameCustomerReturnsCurrentRentalWithoutChanges()
+        {
+            var vehicle = NewVehicle();
+            var customerId = new CustomerId("12345678Z");
+            var rentedAt = Now.AddMinutes(-5);
+            vehicle.Rent(customerId, rentedAt);
+            _repository.Setup(r => r.GetByIdAsync(vehicle.Id)).ReturnsAsync(vehicle);
+
+            await _useCase.Execute(new RentVehicleInput(vehicle.Id, new CustomerId(" 12345678z ")));
+
+            vehicle.CurrentRental.Should().Be(new Rental(customerId, rentedAt));
+            _repository.Verify(r => r.UpdateAsync(It.IsAny<Vehicle>()), Times.Never);
+            _outputPort.Verify(p => p.StandardHandle(It.Is<RentVehicleOutput>(o => o.Vehicle == vehicle)), Times.Once);
+        }
+
         private static Vehicle NewVehicle()
         {
             return Vehicle.Create("1234ABC", "Seat", "Ibiza", new DateOnly(2024, 1, 15), DateOnly.FromDateTime(Now.UtcDateTime));

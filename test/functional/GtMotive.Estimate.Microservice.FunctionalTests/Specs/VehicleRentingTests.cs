@@ -10,13 +10,15 @@ using GtMotive.Estimate.Microservice.Domain;
 using GtMotive.Estimate.Microservice.Domain.Interfaces;
 using GtMotive.Estimate.Microservice.Domain.Vehicles;
 using GtMotive.Estimate.Microservice.FunctionalTests.Infrastructure;
+using GtMotive.Estimate.Microservice.Infrastructure.MongoDb;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+using MongoDB.Bson;
 using Xunit;
 
 namespace GtMotive.Estimate.Microservice.FunctionalTests.Specs
 {
-    public sealed class RentVehicleTests(CompositionRootTestFixture fixture) : FunctionalTestBase(fixture)
+    public sealed class VehicleRentingTests(CompositionRootTestFixture fixture) : FunctionalTestBase(fixture)
     {
         private const string CustomerId = "12345678Z";
 
@@ -95,6 +97,36 @@ namespace GtMotive.Estimate.Microservice.FunctionalTests.Specs
                 var vehicle = await repository.GetByIdAsync(vehicleId);
                 vehicle.IsRented.Should().BeTrue();
             });
+        }
+
+        [Fact]
+        public async Task SameLicensePlateWrittenDifferentlyCannotBeAddedTwice()
+        {
+            await CreateVehicle("6666 fff");
+
+            var addSamePlateAgain = () => CreateVehicle("6666-FFF");
+
+            await addSamePlateAgain.Should().ThrowAsync<DuplicateLicensePlateException>();
+        }
+
+        [Fact]
+        public async Task VehicleStoredBeforeVersioningCanBeRentedAndReturned()
+        {
+            var vehicleId = Guid.NewGuid();
+            await Fixture.UsingRepository<MongoService>(mongo => mongo.Database
+                .GetCollection<BsonDocument>("vehicles")
+                .InsertOneAsync(new BsonDocument
+                {
+                    ["_id"] = new BsonBinaryData(vehicleId, GuidRepresentation.Standard),
+                    ["licensePlate"] = "7777GGG",
+                    ["brand"] = "Seat",
+                    ["model"] = "Arona",
+                    ["manufactureDate"] = DateTime.UtcNow.Date.AddYears(-1),
+                    ["currentRental"] = BsonNull.Value,
+                }));
+
+            (await Rent(vehicleId, NewCustomerId())).Should().BeOfType<OkObjectResult>();
+            (await Return(vehicleId)).Should().BeOfType<OkObjectResult>();
         }
 
         private static string NewCustomerId()

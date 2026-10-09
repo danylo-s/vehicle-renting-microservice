@@ -29,7 +29,15 @@ namespace GtMotive.Estimate.Microservice.Infrastructure.MongoDb
         {
             ArgumentNullException.ThrowIfNull(vehicle);
 
-            await _collection.InsertOneAsync(ToDocument(vehicle, version: 0));
+            try
+            {
+                await _collection.InsertOneAsync(ToDocument(vehicle, version: 0));
+            }
+            catch (MongoWriteException ex) when (ex.WriteError.Category == ServerErrorCategory.DuplicateKey)
+            {
+                throw new DuplicateLicensePlateException($"A vehicle with license plate {vehicle.LicensePlate} already exists.", ex);
+            }
+
             _loadedVersions[vehicle.Id] = 0;
         }
 
@@ -63,11 +71,19 @@ namespace GtMotive.Estimate.Microservice.Infrastructure.MongoDb
 
             // Saved only if nobody changed the vehicle since it was loaded: two employees renting
             // or returning the same vehicle at the same time cannot overwrite each other.
+            var filter = Builders<VehicleDocument>.Filter;
+            var sameVersion = filter.Eq(d => d.Version, loadedVersion);
+            if (loadedVersion == 0)
+            {
+                // Documents stored before versioning have no version field and are read as 0.
+                sameVersion = filter.Or(sameVersion, filter.Exists(d => d.Version, exists: false));
+            }
+
             ReplaceOneResult result;
             try
             {
                 result = await _collection.ReplaceOneAsync(
-                    d => d.Id == vehicle.Id && d.Version == loadedVersion,
+                    filter.And(filter.Eq(d => d.Id, vehicle.Id), sameVersion),
                     ToDocument(vehicle, loadedVersion + 1));
             }
             catch (MongoWriteException ex) when (ex.WriteError.Category == ServerErrorCategory.DuplicateKey)
@@ -87,16 +103,21 @@ namespace GtMotive.Estimate.Microservice.Infrastructure.MongoDb
         {
             // One active rental per customer, enforced by the database under concurrent requests.
             // $type (not $exists) so vehicles without a rental (null) are left out of the index.
-            var keys = Builders<VehicleDocument>.IndexKeys.Ascending(d => d.CurrentRental.CustomerId);
-            var options = new CreateIndexOptions<VehicleDocument>
-            {
-                Name = "ux_currentRental_customerId",
-                Unique = true,
-                PartialFilterExpression = Builders<VehicleDocument>.Filter.Type(d => d.CurrentRental.CustomerId, BsonType.String),
-            };
+            var oneRentalPerCustomer = new CreateIndexModel<VehicleDocument>(
+                Builders<VehicleDocument>.IndexKeys.Ascending(d => d.CurrentRental.CustomerId),
+                new CreateIndexOptions<VehicleDocument>
+                {
+                    Name = "ux_currentRental_customerId",
+                    Unique = true,
+                    PartialFilterExpression = Builders<VehicleDocument>.Filter.Type(d => d.CurrentRental.CustomerId, BsonType.String),
+                });
+
+            var uniqueLicensePlate = new CreateIndexModel<VehicleDocument>(
+                Builders<VehicleDocument>.IndexKeys.Ascending(d => d.LicensePlate),
+                new CreateIndexOptions { Name = "ux_licensePlate", Unique = true });
 
             database.GetCollection<VehicleDocument>(CollectionName)
-                .Indexes.CreateOne(new CreateIndexModel<VehicleDocument>(keys, options));
+                .Indexes.CreateMany([oneRentalPerCustomer, uniqueLicensePlate]);
         }
 
         private static VehicleDocument ToDocument(Vehicle vehicle, long version)

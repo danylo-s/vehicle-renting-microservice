@@ -7,6 +7,7 @@ namespace GtMotive.Estimate.Microservice.ApplicationCore.UseCases.Vehicles
 {
     /// <summary>
     /// Rents a vehicle to a customer. A customer can only have one rented vehicle at a time.
+    /// Renting a vehicle the customer already holds succeeds without changes.
     /// </summary>
     /// <param name="repository">Vehicle repository.</param>
     /// <param name="outputPort">Output port.</param>
@@ -35,6 +36,13 @@ namespace GtMotive.Estimate.Microservice.ApplicationCore.UseCases.Vehicles
             if (vehicle is null)
             {
                 _outputPort.NotFoundHandle($"The vehicle {input.VehicleId} does not exist.");
+                return;
+            }
+
+            // Idempotent: a retried or double-submitted rent for the same customer returns the current rental.
+            if (vehicle.IsRentedBy(input.CustomerId))
+            {
+                _outputPort.StandardHandle(new RentVehicleOutput(vehicle));
                 return;
             }
 

@@ -40,7 +40,9 @@ namespace GtMotive.Estimate.Microservice.Api.Filters
                     Type = "https://tools.ietf.org/html/rfc7231#section-6.6.1",
                     Status = StatusCodes.Status500InternalServerError,
                     Title = "Internal Server Error",
-                    Detail = context.Exception.Message,
+
+                    // The exception is logged; its message may expose internals (e.g. server addresses).
+                    Detail = "An unexpected error occurred.",
                     Instance = context.HttpContext.Request.Path,
                 };
 

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Linq;
 
 namespace GtMotive.Estimate.Microservice.Domain.Vehicles
 {
@@ -83,7 +84,26 @@ namespace GtMotive.Estimate.Microservice.Domain.Vehicles
                 throw new InvalidManufactureDateException($"The fleet cannot contain vehicles manufactured more than {MaxAgeInYears} years ago.");
             }
 
-            return new Vehicle(Guid.NewGuid(), licensePlate.Trim(), brand.Trim(), model.Trim(), manufactureDate, null);
+            var normalizedLicensePlate = NormalizeLicensePlate(licensePlate);
+            if (normalizedLicensePlate.Length == 0)
+            {
+                throw new DomainException($"The license plate '{licensePlate}' is not valid.");
+            }
+
+            return new Vehicle(Guid.NewGuid(), normalizedLicensePlate, brand.Trim(), model.Trim(), manufactureDate, null);
+        }
+
+        /// <summary>
+        /// Normalizes a license plate so the same plate is always stored the same way:
+        /// upper case, without spaces or hyphens ("1234 abc" and "1234-ABC" become "1234ABC").
+        /// </summary>
+        /// <param name="licensePlate">Raw license plate.</param>
+        /// <returns>The normalized license plate.</returns>
+        public static string NormalizeLicensePlate(string licensePlate)
+        {
+            ArgumentNullException.ThrowIfNull(licensePlate);
+
+            return string.Concat(licensePlate.Where(c => !char.IsWhiteSpace(c) && c != '-')).ToUpperInvariant();
         }
 
         /// <summary>
@@ -109,6 +129,16 @@ namespace GtMotive.Estimate.Microservice.Domain.Vehicles
         public bool IsAvailable(DateOnly today)
         {
             return !IsRented && !IsTooOld(ManufactureDate, today);
+        }
+
+        /// <summary>
+        /// Checks whether the vehicle is currently rented by the given customer.
+        /// </summary>
+        /// <param name="customerId">Customer id.</param>
+        /// <returns>True when the customer holds the current rental.</returns>
+        public bool IsRentedBy(CustomerId customerId)
+        {
+            return CurrentRental is not null && CurrentRental.CustomerId == customerId;
         }
 
         /// <summary>

@@ -15,6 +15,7 @@ namespace GtMotive.Estimate.Microservice.Domain.Interfaces
         /// </summary>
         /// <param name="vehicle">Vehicle.</param>
         /// <returns>A task.</returns>
+        /// <exception cref="DuplicateLicensePlateException">Another vehicle has the same license plate.</exception>
         Task AddAsync(Vehicle vehicle);
 
         /// <summary>

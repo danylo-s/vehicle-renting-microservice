@@ -25,9 +25,9 @@ dotnet test src/microservice.sln
 
 | Project | What it covers |
 |---|---|
-| `UnitTests` | `RentVehicleUseCase` in isolation (Moq repository and output port, fixed `TimeProvider`). |
+| `UnitTests` | `RentVehicleUseCase` in isolation (Moq repository and output port, fixed `TimeProvider`): already has a rental, happy path, unknown vehicle, idempotent retry. |
 | `InfrastructureTests` | `POST /api/vehicles` through the TestServer with an invalid body. Checks only request reception and model validation (400), no database. |
-| `FunctionalTests` | MediatR handlers + use cases + real MongoDB (Testcontainers), no HTTP host. A customer cannot rent a second vehicle until the first is returned. |
+| `FunctionalTests` | MediatR handlers + use cases + real MongoDB (Testcontainers), no HTTP host. One rental per customer, concurrent rents, stale return, duplicate license plates, vehicles stored before versioning. |
 
 ## Why .NET 10
 
@@ -44,18 +44,24 @@ The Dockerfile no longer uses the private Azure Artifacts feed, because every pa
 
 | Method | Route | Body | Success | Errors |
 |---|---|---|---|---|
-| POST | `/api/vehicles` | `{ "licensePlate", "brand", "model", "manufactureDate": "yyyy-MM-dd" }` | 201 + vehicle | 400 validation / older than 5 years / future date |
+| POST | `/api/vehicles` | `{ "licensePlate", "brand", "model", "manufactureDate": "yyyy-MM-dd" }` | 201 + vehicle | 400 validation / older than 5 years / future date / duplicate license plate |
 | GET | `/api/vehicles/available` | – | 200 + list | – |
-| POST | `/api/vehicles/{id}/rent` | `{ "customerId" }` | 200 + vehicle | 400 validation / already rented / customer already has a rental / vehicle too old; 404 unknown id |
+| POST | `/api/vehicles/{id}/rent` | `{ "customerId" }` | 200 + vehicle (also when the same customer already holds it) | 400 validation / already rented / customer already has a rental / vehicle too old / modified concurrently; 404 unknown id |
 | POST | `/api/vehicles/{id}/return` | – | 200 + vehicle | 400 not rented; 404 unknown id |
 
 Business-rule violations are `DomainException`s. The template's `BusinessExceptionFilter` turns them into 400 ProblemDetails. An unknown vehicle id goes through the template's `IOutputPortNotFound` and returns 404.
+
+Any other error returns 500 with a generic message. The full exception is only logged, because its message can expose internals such as database server addresses.
 
 ## Interpretation decisions
 
 - A person is identified by a `customerId` string (for example a national ID) sent in the rent request. There is no customer entity or endpoint. The id is trimmed and upper-cased, so `a-111` and `A-111` are the same person.
 - **Available** means not currently rented AND manufactured within the last 5 years, as of today.
 - **5-year rule:** creating a vehicle fails if `manufactureDate < today - 5 years` or if the date is in the future. Vehicles that age out later are left out of the available list and cannot be rented. There is no background cleanup job.
+  - The boundary is inclusive: a vehicle manufactured exactly 5 years ago today is still allowed.
+  - "Today" is the UTC date. Around midnight in Spain (UTC+1/+2) the boundary day can differ by one from the local date. A configurable business time zone is a possible improvement.
+- **License plates** are normalized (upper case, no spaces or hyphens) and must be unique. `1234 abc` and `1234-ABC` are the same plate, so the second one is rejected. A unique index enforces this, also under concurrent requests.
+- **Renting is idempotent for the same customer.** If an employee double-clicks, or retries after a timeout, and the vehicle is already rented by that customer, the request returns 200 with the current rental and changes nothing.
 - A vehicle is returned by its id only. Returning a vehicle that is not rented is a business error.
 - There is no rental history. A vehicle holds only its current rental (`customerId`, `rentedAt`), or none.
 - "Now" comes from an injected `System.TimeProvider`, so the rules are testable.
@@ -77,8 +83,17 @@ Business-rule violations are `DomainException`s. The template's `BusinessExcepti
   - The losing request gets a 400 ("modified by another request, reload and try again").
   - This covers two customers renting the same vehicle at once, and a slow, stale return that would otherwise erase a newer rental.
   - The version stays in the persistence document. The domain model doesn't change.
+  - Documents stored before versioning have no `version` field. They are treated as version 0, so they can still be updated.
 - Functional tests cover both races (same vehicle, and same customer renting different vehicles) and the stale return.
 - MongoDB settings use the template's `MongoDb` section (`ConnectionString`, `MongoDbDatabaseName`). Indexes are created once, when `MongoService` is first resolved.
+  - The license-plate index cannot be created if existing data already has duplicate or non-normalized plates. Use a clean volume (`docker compose down -v`) or clean that data first.
+
+## Possible improvements
+
+- **.NET Aspire, if the service grows.** With more services, or a team working on them daily, an Aspire AppHost could replace docker compose for local development. It provides a dashboard with logs, traces and metrics, wires up MongoDB automatically, and offers service discovery. Docker compose was kept here because the brief allows only Docker as a dependency (Aspire also needs the .NET SDK) and asks for no extra projects (Aspire adds `AppHost` and `ServiceDefaults`).
+- **Integration events.** Publish `VehicleRented` / `VehicleReturned` through the template's `IBus` with an outbox, if other services (billing, maintenance) need them.
+- **Business time zone** for the 5-year rule. Pagination for the available list. Rental history.
+- **409 Conflict instead of 400 for concurrency conflicts.** The brief maps all business errors to 400, which is why 400 is used now.
 
 ---
 
