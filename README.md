@@ -93,6 +93,14 @@ Any other error returns 500 with a generic message. The full exception is only l
 - **.NET Aspire, if the service grows.** With more services, or a team working on them daily, an Aspire AppHost could replace docker compose for local development. It provides a dashboard with logs, traces and metrics, wires up MongoDB automatically, and offers service discovery. Docker compose was kept here because the brief allows only Docker as a dependency (Aspire also needs the .NET SDK) and asks for no extra projects (Aspire adds `AppHost` and `ServiceDefaults`).
 - **Integration events.** Publish `VehicleRented` / `VehicleReturned` through the template's `IBus` with an outbox, if other services (billing, maintenance) need them.
 - **Business time zone** for the 5-year rule. Pagination for the available list. Rental history.
+- **Authentication and authorization.** Most of the plumbing is already in the template, but turning it on locally needs a token issuer.
+  - **What exists:** `Program.cs` already configures JWT validation against `AppSettings:JwtAuthority`. Swagger already has the OAuth2 flow and adds the security requirement (`IdentityServerApiSecurityOperationFilter`). `AuthorizationOptionsExtensions.Configure` is the place for policies. The infrastructure tests already authenticate through the Acheve TestServer scheme.
+  - **Protect the endpoints:** add `[Authorize]` to `VehiclesController`, with a policy per action. For example, an `estimate-api` scope for reading, and an employee or role claim for create, rent and return.
+  - **Replace IdentityServer4 token validation:** `IdentityServer4.AccessTokenValidation` is no longer maintained. Use `Microsoft.AspNetCore.Authentication.JwtBearer`, which is already referenced, and point it to the company identity server.
+  - **Running locally:** add a token issuer that runs in Docker (for example Keycloak in `docker-compose.yml`), or use `dotnet user-jwts` for development tokens. Without one, the API cannot be called locally.
+  - **Use the identity in the domain:** store which employee rented or returned a vehicle (an audit field on `Rental`). Resource-based rules (for example, "only the branch that rented the vehicle can return it") would go through the template's `IAuthorizationService` port.
+  - **Tests:** an infrastructure test for 401 without a token and 403 without the right claim.
+- **Global exception safety net.** `BusinessExceptionFilter` only sees exceptions inside controllers. Adding `AddProblemDetails()`, `UseExceptionHandler()` and `UseStatusCodePages()` would also return ProblemDetails for middleware errors and for empty 404/405 responses.
 - **409 Conflict instead of 400 for concurrency conflicts.** The brief maps all business errors to 400, which is why 400 is used now.
 
 ---
